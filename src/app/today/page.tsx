@@ -1,4 +1,5 @@
 'use client';
+
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 
@@ -8,13 +9,13 @@ type Row = {
   league: string | null;
   home: string | null;
   away: string | null;
-  kickoff_utc: string | null; // ISO in UTC from DB
+  kickoff_utc: string | null; // ISO UTC from DB
   tier: number | null;
   region: string | null;
 };
 
 function fmtWAT(ts: string | null) {
-  if (!ts) return '–';
+  if (!ts) return '—';
   const d = new Date(ts);
   if (isNaN(d.getTime())) return ts;
   return d.toLocaleString('en-GB', {
@@ -41,11 +42,11 @@ export default function TodayPage() {
       setLoading(true);
       setError(null);
 
-      cconst { data, error } = await supabase
-  	.schema('api')                  // query the `api` schema
-  	.from(VIEW)                     // v_candidates_today_public
-  	.select('*')
-  	.order('kickoff_utc', { ascending: true });
+      const { data, error } = await supabase
+        .schema('api') // query the `api` schema
+        .from(VIEW) // v_candidates_today_public
+        .select('*')
+        .order('kickoff_utc', { ascending: true });
 
       if (cancelled) return;
 
@@ -71,7 +72,15 @@ export default function TodayPage() {
     const needle = q.trim().toLowerCase();
     if (!needle) return rows;
     return rows.filter((r) => {
-      const hay = `${r.league ?? ''} ${r.home ?? ''} ${r.away ?? ''} ${r.region ?? ''}`.toLowerCase();
+      const hay = [
+        r.league ?? '',
+        r.home ?? '',
+        r.away ?? '',
+        r.region ?? '',
+        String(r.tier ?? ''),
+      ]
+        .join(' ')
+        .toLowerCase();
       return hay.includes(needle);
     });
   }, [rows, q]);
@@ -80,15 +89,14 @@ export default function TodayPage() {
     <div>
       <h1 className="text-2xl font-semibold mb-4">Today</h1>
 
-      {/* quick text search */}
       <div className="mb-4">
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="Search league / teams / region…"
-          className="w-full max-w-md rounded-lg border px-3 py-2 text-sm outline-none focus:ring"
+          placeholder="Search fixtures… (team, league, region)"
+          className="w-full max-w-sm rounded-md border px-3 py-2"
+          aria-label="Search fixtures"
         />
-        <p className="mt-1 text-xs text-neutral-500">All times in <strong>WAT</strong>.</p>
       </div>
 
       {loading && <p>Loading…</p>}
@@ -109,19 +117,20 @@ export default function TodayPage() {
             </thead>
             <tbody>
               {filtered.map((r, i) => (
-                <tr key={`${i}-${r.kickoff_utc ?? ''}`} className="border-b hover:bg-neutral-50">
+                <tr key={`${i}`} className="border-b hover:bg-neutral-50">
                   <td className="p-2">{fmtWAT(r.kickoff_utc)}</td>
-                  <td className="p-2">{r.league ?? '–'}</td>
-                  <td className="p-2">{r.tier ?? '–'}</td>
-                  <td className="p-2">{r.home ?? '–'}</td>
-                  <td className="p-2">{r.away ?? '–'}</td>
-                  <td className="p-2">{r.region ?? '–'}</td>
+                  <td className="p-2">{r.league ?? '—'}</td>
+                  <td className="p-2">{r.tier ?? '—'}</td>
+                  <td className="p-2">{r.home ?? '—'}</td>
+                  <td className="p-2">{r.away ?? '—'}</td>
+                  <td className="p-2">{r.region ?? '—'}</td>
                 </tr>
               ))}
+
               {filtered.length === 0 && (
                 <tr>
                   <td className="p-2" colSpan={6}>
-                    No fixtures today{q ? ' matching your search' : ''}.
+                    No fixtures today.
                   </td>
                 </tr>
               )}
