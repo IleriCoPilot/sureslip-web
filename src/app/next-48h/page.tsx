@@ -8,7 +8,7 @@ type Row = {
   league: string | null;
   home: string | null;
   away: string | null;
-  kickoff_utc: string | null; // ISO in UTC from DB
+  kickoff_utc: string | null; // ISO string in UTC from DB
   tier: number | null;
   region: string | null;
 };
@@ -17,7 +17,7 @@ function fmtWAT(ts: string | null) {
   if (!ts) return '—';
   const d = new Date(ts);
   if (isNaN(d.getTime())) return ts;
-  // West Africa Time
+
   return d.toLocaleString('en-GB', {
     timeZone: 'Africa/Lagos',
     year: 'numeric',
@@ -42,8 +42,8 @@ export default function Next48hPage() {
       setError(null);
 
       const { data, error } = await supabase
-        .schema('api')                 // query the `api` schema
-        .from(VIEW)                    // v_candidates_next_48h_public
+        .schema('api')                  // query the `api` schema
+        .from(VIEW)                     // v_candidates_next_48h_public
         .select('*')
         .order('kickoff_utc', { ascending: true });
 
@@ -98,6 +98,7 @@ export default function Next48hPage() {
                   <td className="p-2">{r.region ?? '—'}</td>
                 </tr>
               ))}
+
               {rows.length === 0 && (
                 <tr>
                   <td className="p-2" colSpan={6}>
