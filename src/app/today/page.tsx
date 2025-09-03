@@ -41,11 +41,11 @@ export default function TodayPage() {
       setLoading(true);
       setError(null);
 
-      const { data, error } = await supabase
-        .schema('api') // query the `api` schema
-        .from(VIEW)
-        .select('*')
-        .order('kickoff_utc', { ascending: true });
+      cconst { data, error } = await supabase
+  	.schema('api')                  // query the `api` schema
+  	.from(VIEW)                     // v_candidates_today_public
+  	.select('*')
+  	.order('kickoff_utc', { ascending: true });
 
       if (cancelled) return;
 
