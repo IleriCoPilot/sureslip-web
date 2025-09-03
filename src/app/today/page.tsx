@@ -1,5 +1,6 @@
 'use client';
-import { useEffect, useState } from 'react';
+
+import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 
 const VIEW = 'v_candidates_today_public';
@@ -8,17 +9,16 @@ type Row = {
   league: string | null;
   home: string | null;
   away: string | null;
-  kickoff_utc: string | null; // ISO string in UTC from DB
+  kickoff_utc: string | null; // ISO in UTC from DB
   tier: number | null;
   region: string | null;
 };
 
 function fmtWAT(ts: string | null) {
-  if (!ts) return '—';
+  if (!ts) return '-';
   const d = new Date(ts);
-  if (isNaN(d.getTime())) return ts; // safety fallback
-
-  // West Africa Time (Africa/Lagos)
+  if (isNaN(d.getTime())) return ts;
+  // West Africa Time
   return d.toLocaleString('en-GB', {
     timeZone: 'Africa/Lagos',
     year: 'numeric',
@@ -34,6 +34,7 @@ export default function TodayPage() {
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
 
   useEffect(() => {
     let cancelled = false;
@@ -43,8 +44,8 @@ export default function TodayPage() {
       setError(null);
 
       const { data, error } = await supabase
-        .schema('api')               // query the `api` schema
-        .from(VIEW)                  // v_candidates_today_public
+        .schema('api') // query the `api` schema
+        .from(VIEW)    // v_candidates_today_public
         .select('*')
         .order('kickoff_utc', { ascending: true });
 
@@ -61,18 +62,39 @@ export default function TodayPage() {
     }
 
     load();
-    const t = setInterval(load, 90_000); // refresh every 90s
+
+    // refresh every 90s
+    const t = setInterval(load, 90_000);
     return () => {
       cancelled = true;
       clearInterval(t);
     };
   }, []);
 
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return rows;
+    return rows.filter((r) => {
+      return [r.league, r.home, r.away, r.region]
+        .map((x) => (x ?? '').toLowerCase())
+        .some((x) => x.includes(q));
+    });
+  }, [rows, query]);
+
   return (
     <>
       <h1 className="text-2xl font-semibold mb-4">Today</h1>
 
-      {loading && <p>Loading…</p>}
+      {/* Quick text filter */}
+      <input
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="Search league / team / region"
+        className="mb-4 w-full max-w-md rounded-md border px-3 py-2"
+        aria-label="Quick filter"
+      />
+
+      {loading && <p>Loading...</p>}
       {error && <p className="text-red-600">Error: {error}</p>}
 
       {!loading && !error && (
@@ -89,18 +111,17 @@ export default function TodayPage() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((r, i) => (
+              {filtered.map((r, i) => (
                 <tr key={i} className="border-b hover:bg-neutral-50">
                   <td className="p-2">{fmtWAT(r.kickoff_utc)}</td>
-                  <td className="p-2">{r.league ?? '—'}</td>
-                  <td className="p-2">{r.tier ?? '—'}</td>
-                  <td className="p-2">{r.home ?? '—'}</td>
-                  <td className="p-2">{r.away ?? '—'}</td>
-                  <td className="p-2">{r.region ?? '—'}</td>
+                  <td className="p-2">{r.league ?? '-'}</td>
+                  <td className="p-2">{r.tier ?? '-'}</td>
+                  <td className="p-2">{r.home ?? '-'}</td>
+                  <td className="p-2">{r.away ?? '-'}</td>
+                  <td className="p-2">{r.region ?? '-'}</td>
                 </tr>
               ))}
-
-              {rows.length === 0 && (
+              {filtered.length === 0 && (
                 <tr>
                   <td className="p-2" colSpan={6}>
                     No fixtures today.
