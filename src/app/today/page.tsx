@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 
 const VIEW = 'v_candidates_today_public';
@@ -8,17 +8,15 @@ type Row = {
   league: string | null;
   home: string | null;
   away: string | null;
-  kickoff_utc: string | null; // ISO string in UTC from DB
+  kickoff_utc: string | null; // ISO in UTC from DB
   tier: number | null;
   region: string | null;
 };
 
 function fmtWAT(ts: string | null) {
-  if (!ts) return '—';
+  if (!ts) return '–';
   const d = new Date(ts);
-  if (isNaN(d.getTime())) return ts; // safety fallback
-
-  // West Africa Time (Africa/Lagos)
+  if (isNaN(d.getTime())) return ts;
   return d.toLocaleString('en-GB', {
     timeZone: 'Africa/Lagos',
     year: 'numeric',
@@ -34,6 +32,7 @@ export default function TodayPage() {
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [q, setQ] = useState('');
 
   useEffect(() => {
     let cancelled = false;
@@ -44,7 +43,7 @@ export default function TodayPage() {
 
       const { data, error } = await supabase
         .schema('api') // query the `api` schema
-        .from(VIEW) // v_candidates_today_public
+        .from(VIEW)
         .select('*')
         .order('kickoff_utc', { ascending: true });
 
@@ -68,9 +67,29 @@ export default function TodayPage() {
     };
   }, []);
 
+  const filtered = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    if (!needle) return rows;
+    return rows.filter((r) => {
+      const hay = `${r.league ?? ''} ${r.home ?? ''} ${r.away ?? ''} ${r.region ?? ''}`.toLowerCase();
+      return hay.includes(needle);
+    });
+  }, [rows, q]);
+
   return (
-    <>
+    <div>
       <h1 className="text-2xl font-semibold mb-4">Today</h1>
+
+      {/* quick text search */}
+      <div className="mb-4">
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Search league / teams / region…"
+          className="w-full max-w-md rounded-lg border px-3 py-2 text-sm outline-none focus:ring"
+        />
+        <p className="mt-1 text-xs text-neutral-500">All times in <strong>WAT</strong>.</p>
+      </div>
 
       {loading && <p>Loading…</p>}
       {error && <p className="text-red-600">Error: {error}</p>}
@@ -89,21 +108,20 @@ export default function TodayPage() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((r, i) => (
-                <tr key={i} className="border-b hover:bg-neutral-50">
+              {filtered.map((r, i) => (
+                <tr key={`${i}-${r.kickoff_utc ?? ''}`} className="border-b hover:bg-neutral-50">
                   <td className="p-2">{fmtWAT(r.kickoff_utc)}</td>
-                  <td className="p-2">{r.league ?? '—'}</td>
-                  <td className="p-2">{r.tier ?? '—'}</td>
-                  <td className="p-2">{r.home ?? '—'}</td>
-                  <td className="p-2">{r.away ?? '—'}</td>
-                  <td className="p-2">{r.region ?? '—'}</td>
+                  <td className="p-2">{r.league ?? '–'}</td>
+                  <td className="p-2">{r.tier ?? '–'}</td>
+                  <td className="p-2">{r.home ?? '–'}</td>
+                  <td className="p-2">{r.away ?? '–'}</td>
+                  <td className="p-2">{r.region ?? '–'}</td>
                 </tr>
               ))}
-
-              {rows.length === 0 && (
+              {filtered.length === 0 && (
                 <tr>
                   <td className="p-2" colSpan={6}>
-                    No fixtures today.
+                    No fixtures today{q ? ' matching your search' : ''}.
                   </td>
                 </tr>
               )}
@@ -111,6 +129,6 @@ export default function TodayPage() {
           </table>
         </div>
       )}
-    </>
+    </div>
   );
 }
