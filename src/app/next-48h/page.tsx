@@ -42,8 +42,8 @@ export default function Next48hPage() {
       setError(null);
 
       const { data, error } = await supabase
-        .schema('api')                  // query the `api` schema
-        .from(VIEW)                     // v_candidates_next_48h_public
+        .schema('api') // query the `api` schema
+        .from(VIEW) // v_candidates_next_48h_public
         .select('*')
         .order('kickoff_utc', { ascending: true });
 

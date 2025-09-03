@@ -8,4 +8,3 @@ export const supabase = createBrowserClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
   { db: { schema: 'api' } } // our views live in the "api" schema
 );
-
