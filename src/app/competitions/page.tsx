@@ -55,11 +55,9 @@ export default function CompetitionsPage() {
   const filtered = useMemo(() => {
     return rows.filter((r) => {
       const regionOk =
-        region === 'all' ||
-        (r.region ?? '').toLowerCase() === (region ?? '').toLowerCase();
+        region === 'all' || (r.region ?? '').toLowerCase() === (region ?? '').toLowerCase();
       const confedOk =
-        confed === 'all' ||
-        (r.confederation ?? '').toLowerCase() === (confed ?? '').toLowerCase();
+        confed === 'all' || (r.confederation ?? '').toLowerCase() === (confed ?? '').toLowerCase();
       return regionOk && confedOk;
     });
   }, [rows, region, confed]);
@@ -118,10 +116,7 @@ export default function CompetitionsPage() {
             </thead>
             <tbody>
               {filtered.map((r) => (
-                <tr
-                  key={`${r.code}:${r.season}`}
-                  className="border-b hover:bg-neutral-50"
-                >
+                <tr key={`${r.code}:${r.season}`} className="border-b hover:bg-neutral-50">
                   <td className="p-2">{r.code ?? '-'}</td>
                   <td className="p-2">{r.name ?? '-'}</td>
                   <td className="p-2">{r.region ?? '-'}</td>
