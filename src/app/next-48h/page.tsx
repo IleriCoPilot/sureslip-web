@@ -3,132 +3,166 @@
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 
-const VIEW = 'v_candidates_next_48h_public';
-
 type Row = {
-  league: string | null;
-  home: string | null;
-  away: string | null;
-  kickoff_utc: string | null; // ISO in UTC from DB
-  tier: number | null;
+  league: string;
+  home: string;
+  away: string;
   region: string | null;
+  tier: number | null;
+  kickoff_utc: string | null; // ISO string in UTC
 };
 
-function fmtWAT(ts: string | null) {
-  if (!ts) return '-';
-  const d = new Date(ts);
-  if (isNaN(d.getTime())) return ts;
-  return d.toLocaleString('en-GB', {
-    timeZone: 'Africa/Lagos',
-    year: 'numeric',
-    month: 'short',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  });
+const VIEW = 'v_candidates_next_48h_public'; // api schema
+
+function fmtWAT(iso: string | null) {
+  if (!iso) return '—';
+  try {
+    const d = new Date(iso);
+    return new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Africa/Lagos', // WAT
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).format(d);
+  } catch {
+    return '—';
+  }
 }
 
-export default function Next48hPage() {
+function localYYYYMMDD(iso: string | null) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+export default function Next48Page() {
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [query, setQuery] = useState('');
+
+  // filters
+  const [q, setQ] = useState('');
+  const [dateStr, setDateStr] = useState<string>(''); // YYYY-MM-DD (local)
 
   useEffect(() => {
     let cancelled = false;
-
     async function load() {
       setLoading(true);
       setError(null);
-
       const { data, error } = await supabase
-        .schema('api') // query the `api` schema
-        .from(VIEW)    // v_candidates_next_48h_public
-        .select('*')
-        .order('kickoff_utc', { ascending: true });
+        .schema('api')
+        .from(VIEW)
+        .select('*');
 
       if (cancelled) return;
-
       if (error) {
         setError(error.message);
-        setLoading(false);
-        return;
+        setRows([]);
+      } else {
+        setRows((data ?? []) as Row[]);
       }
-
-      setRows((data ?? []) as Row[]);
       setLoading(false);
     }
-
     load();
-    const t = setInterval(load, 90_000);
     return () => {
       cancelled = true;
-      clearInterval(t);
     };
   }, []);
 
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return rows;
-    return rows.filter((r) =>
-      [r.league, r.home, r.away, r.region]
-        .map((x) => (x ?? '').toLowerCase())
-        .some((x) => x.includes(q)),
-    );
-  }, [rows, query]);
+    const needle = q.trim().toLowerCase();
+    return rows.filter((r) => {
+      const textPass =
+        !needle ||
+        [
+          r.league,
+          r.home,
+          r.away,
+          r.region ?? '',
+          (r.tier ?? '').toString(),
+        ]
+          .join(' ')
+          .toLowerCase()
+          .includes(needle);
+
+      const datePass = !dateStr || localYYYYMMDD(r.kickoff_utc) === dateStr;
+
+      return textPass && datePass;
+    });
+  }, [rows, q, dateStr]);
 
   return (
-    <>
-      <h1 className="text-2xl font-semibold mb-4">Next 48 Hours</h1>
+    <main className="p-6">
+      <h1 className="text-2xl font-semibold mb-6 border-b pb-3">Next 48 Hours</h1>
 
-      {/* Quick text filter */}
-      <input
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        placeholder="Search league / team / region"
-        className="mb-4 w-full max-w-md rounded-md border px-3 py-2"
-        aria-label="Quick filter"
-      />
+      <div className="flex gap-3 mb-4">
+        <input
+          type="date"
+          className="border rounded px-3 py-2"
+          value={dateStr}
+          onChange={(e) => setDateStr(e.target.value)}
+          aria-label="Pick date"
+        />
+        <input
+          type="text"
+          className="border rounded px-3 py-2 flex-1"
+          placeholder="Search league / team / region"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          aria-label="Quick filter"
+        />
+      </div>
 
-      {loading && <p>Loading...</p>}
-      {error && <p className="text-red-600">Error: {error}</p>}
-
-      {!loading && !error && (
-        <div className="overflow-x-auto">
-          <table className="min-w-full border rounded-lg">
-            <thead className="sticky top-0 bg-white">
-              <tr className="text-left border-b">
-                <th className="p-2">Kickoff (WAT)</th>
-                <th className="p-2">League</th>
-                <th className="p-2">Tier</th>
-                <th className="p-2">Home</th>
-                <th className="p-2">Away</th>
-                <th className="p-2">Region</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((r, i) => (
-                <tr key={i} className="border-b hover:bg-neutral-50">
-                  <td className="p-2">{fmtWAT(r.kickoff_utc)}</td>
-                  <td className="p-2">{r.league ?? '-'}</td>
-                  <td className="p-2">{r.tier ?? '-'}</td>
-                  <td className="p-2">{r.home ?? '-'}</td>
-                  <td className="p-2">{r.away ?? '-'}</td>
-                  <td className="p-2">{r.region ?? '-'}</td>
-                </tr>
-              ))}
-              {filtered.length === 0 && (
-                <tr>
-                  <td className="p-2" colSpan={6}>
-                    No fixtures in the next 48 hours.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+      {error && (
+        <div className="text-red-600 mb-3">Error loading data: {error}</div>
       )}
-    </>
+
+      <div className="overflow-x-auto">
+        <table className="w-full border-collapse">
+          <thead>
+            <tr className="[&>th]:border [&>th]:px-3 [&>th]:py-2 text-left">
+              <th>Kickoff (WAT)</th>
+              <th>League</th>
+              <th>Tier</th>
+              <th>Home</th>
+              <th>Away</th>
+              <th>Region</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              <tr>
+                <td className="border px-3 py-2" colSpan={6}>
+                  Loading…
+                </td>
+              </tr>
+            ) : filtered.length === 0 ? (
+              <tr>
+                <td className="border px-3 py-2" colSpan={6}>
+                  No matches.
+                </td>
+              </tr>
+            ) : (
+              filtered.map((r, i) => (
+                <tr key={i} className="[&>td]:border [&>td]:px-3 [&>td]:py-2">
+                  <td>{fmtWAT(r.kickoff_utc)}</td>
+                  <td>{r.league}</td>
+                  <td>{r.tier ?? '—'}</td>
+                  <td>{r.home}</td>
+                  <td>{r.away}</td>
+                  <td>{r.region ?? '—'}</td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </main>
   );
 }
