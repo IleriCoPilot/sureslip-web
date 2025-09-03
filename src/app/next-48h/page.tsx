@@ -1,5 +1,6 @@
 'use client';
-import { useEffect, useState } from 'react';
+
+import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 
 const VIEW = 'v_candidates_next_48h_public';
@@ -8,7 +9,7 @@ type Row = {
   league: string | null;
   home: string | null;
   away: string | null;
-  kickoff_utc: string | null; // ISO string in UTC from DB
+  kickoff_utc: string | null; // ISO UTC from DB
   tier: number | null;
   region: string | null;
 };
@@ -17,7 +18,6 @@ function fmtWAT(ts: string | null) {
   if (!ts) return '—';
   const d = new Date(ts);
   if (isNaN(d.getTime())) return ts;
-
   return d.toLocaleString('en-GB', {
     timeZone: 'Africa/Lagos',
     year: 'numeric',
@@ -33,6 +33,7 @@ export default function Next48hPage() {
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [q, setQ] = useState('');
 
   useEffect(() => {
     let cancelled = false;
@@ -67,9 +68,36 @@ export default function Next48hPage() {
     };
   }, []);
 
+  const filtered = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    if (!needle) return rows;
+    return rows.filter((r) => {
+      const hay = [
+        r.league ?? '',
+        r.home ?? '',
+        r.away ?? '',
+        r.region ?? '',
+        String(r.tier ?? ''),
+      ]
+        .join(' ')
+        .toLowerCase();
+      return hay.includes(needle);
+    });
+  }, [rows, q]);
+
   return (
-    <>
+    <div>
       <h1 className="text-2xl font-semibold mb-4">Next 48 Hours</h1>
+
+      <div className="mb-4">
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Search fixtures… (team, league, region)"
+          className="w-full max-w-sm rounded-md border px-3 py-2"
+          aria-label="Search fixtures"
+        />
+      </div>
 
       {loading && <p>Loading…</p>}
       {error && <p className="text-red-600">Error: {error}</p>}
@@ -88,8 +116,8 @@ export default function Next48hPage() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((r, i) => (
-                <tr key={i} className="border-b hover:bg-neutral-50">
+              {filtered.map((r, i) => (
+                <tr key={`${i}`} className="border-b hover:bg-neutral-50">
                   <td className="p-2">{fmtWAT(r.kickoff_utc)}</td>
                   <td className="p-2">{r.league ?? '—'}</td>
                   <td className="p-2">{r.tier ?? '—'}</td>
@@ -99,7 +127,7 @@ export default function Next48hPage() {
                 </tr>
               ))}
 
-              {rows.length === 0 && (
+              {filtered.length === 0 && (
                 <tr>
                   <td className="p-2" colSpan={6}>
                     No fixtures in the next 48 hours.
@@ -110,6 +138,6 @@ export default function Next48hPage() {
           </table>
         </div>
       )}
-    </>
+    </div>
   );
 }
