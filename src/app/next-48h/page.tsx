@@ -1,168 +1,178 @@
-'use client';
+"use client";
 
-import { useEffect, useMemo, useState } from 'react';
-import { supabase } from '@/lib/supabaseClient';
+import { useEffect, useMemo, useState } from "react";
+import { supabase } from "@/lib/supabaseClient"; // named export
+// This view is your public “next 48h” candidates
+const VIEW = "v_candidates_next_48h_public";
 
 type Row = {
-  league: string;
-  home: string;
-  away: string;
-  region: string | null;
+  league: string | null;
+  home: string | null;
+  away: string | null;
+  kickoff_utc: string | null; // ISO string from DB
   tier: number | null;
-  kickoff_utc: string | null; // ISO string in UTC
+  region: string | null;
 };
 
-const VIEW = 'v_candidates_next_48h_public'; // api schema
-
-function fmtWAT(iso: string | null) {
-  if (!iso) return '—';
-  try {
-    const d = new Date(iso);
-    return new Intl.DateTimeFormat('en-GB', {
-      timeZone: 'Africa/Lagos', // WAT
-      day: '2-digit',
-      month: 'short',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false,
-    }).format(d);
-  } catch {
-    return '—';
-  }
+function sameLocalDate(iso: string | null, ymd: string): boolean {
+  if (!iso) return false;
+  const [y, m, d] = ymd.split("-").map((n) => parseInt(n, 10));
+  const dt = new Date(iso);
+  return (
+    dt.getFullYear() === y &&
+    dt.getMonth() + 1 === m &&
+    dt.getDate() === d
+  );
 }
 
-function localYYYYMMDD(iso: string | null) {
-  if (!iso) return '';
-  const d = new Date(iso);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
-
-export default function Next48Page() {
+export default function Next48hPage() {
   const [rows, setRows] = useState<Row[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [q, setQ] = useState("");
+  const [filterDate, setFilterDate] = useState<string>(""); // YYYY-MM-DD
   const [error, setError] = useState<string | null>(null);
-
-  // filters
-  const [q, setQ] = useState('');
-  const [dateStr, setDateStr] = useState<string>(''); // YYYY-MM-DD (local)
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
-    async function load() {
+    (async () => {
       setLoading(true);
       setError(null);
       const { data, error } = await supabase
-        .schema('api')
+        .schema("api")
         .from(VIEW)
-        .select('*');
-
+        .select("*");
       if (cancelled) return;
       if (error) {
         setError(error.message);
-        setRows([]);
       } else {
         setRows((data ?? []) as Row[]);
       }
       setLoading(false);
-    }
-    load();
+    })();
     return () => {
       cancelled = true;
     };
   }, []);
 
   const filtered = useMemo(() => {
-    const needle = q.trim().toLowerCase();
+    const qnorm = q.trim().toLowerCase();
     return rows.filter((r) => {
-      const textPass =
-        !needle ||
-        [
-          r.league,
-          r.home,
-          r.away,
-          r.region ?? '',
-          (r.tier ?? '').toString(),
-        ]
-          .join(' ')
-          .toLowerCase()
-          .includes(needle);
+      const matchText =
+        !qnorm ||
+        [r.league, r.home, r.away, r.region]
+          .map((v) => (v ?? "").toLowerCase())
+          .some((v) => v.includes(qnorm));
 
-      const datePass = !dateStr || localYYYYMMDD(r.kickoff_utc) === dateStr;
+      const matchDate =
+        !filterDate || sameLocalDate(r.kickoff_utc, filterDate);
 
-      return textPass && datePass;
+      return matchText && matchDate;
     });
-  }, [rows, q, dateStr]);
+  }, [rows, q, filterDate]);
 
   return (
-    <main className="p-6">
-      <h1 className="text-2xl font-semibold mb-6 border-b pb-3">Next 48 Hours</h1>
+    <main style={{ padding: "24px 32px", maxWidth: 1080, margin: "0 auto" }}>
+      <h1 style={{ fontSize: 28, fontWeight: 700, marginBottom: 16 }}>Next 48 Hours</h1>
 
-      <div className="flex gap-3 mb-4">
+      <div style={{ display: "flex", gap: 12, marginBottom: 16 }}>
         <input
+          aria-label="Pick a date"
           type="date"
-          className="border rounded px-3 py-2"
-          value={dateStr}
-          onChange={(e) => setDateStr(e.target.value)}
-          aria-label="Pick date"
+          value={filterDate}
+          onChange={(e) => setFilterDate(e.target.value)}
+          style={{
+            height: 36,
+            padding: "0 10px",
+            border: "1px solid #ccc",
+            borderRadius: 6,
+          }}
         />
         <input
+          aria-label="Search"
           type="text"
-          className="border rounded px-3 py-2 flex-1"
           placeholder="Search league / team / region"
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          aria-label="Quick filter"
+          style={{
+            flex: 1,
+            height: 36,
+            padding: "0 12px",
+            border: "1px solid #ccc",
+            borderRadius: 6,
+          }}
         />
       </div>
 
-      {error && (
-        <div className="text-red-600 mb-3">Error loading data: {error}</div>
-      )}
+      {loading && <div>Loading…</div>}
+      {error && <div style={{ color: "crimson" }}>Error: {error}</div>}
 
-      <div className="overflow-x-auto">
-        <table className="w-full border-collapse">
+      {!loading && !error && (
+        <table
+          style={{
+            width: "100%",
+            borderCollapse: "collapse",
+            border: "1px solid #ddd",
+          }}
+        >
           <thead>
-            <tr className="[&>th]:border [&>th]:px-3 [&>th]:py-2 text-left">
-              <th>Kickoff (WAT)</th>
-              <th>League</th>
-              <th>Tier</th>
-              <th>Home</th>
-              <th>Away</th>
-              <th>Region</th>
+            <tr>
+              {["Kickoff (WAT)", "League", "Tier", "Home", "Away", "Region"].map(
+                (h) => (
+                  <th
+                    key={h}
+                    style={{
+                      textAlign: "left",
+                      padding: "10px 12px",
+                      borderBottom: "1px solid #eee",
+                    }}
+                  >
+                    {h}
+                  </th>
+                )
+              )}
             </tr>
           </thead>
           <tbody>
-            {loading ? (
-              <tr>
-                <td className="border px-3 py-2" colSpan={6}>
-                  Loading…
-                </td>
-              </tr>
-            ) : filtered.length === 0 ? (
-              <tr>
-                <td className="border px-3 py-2" colSpan={6}>
-                  No matches.
-                </td>
-              </tr>
-            ) : (
-              filtered.map((r, i) => (
-                <tr key={i} className="[&>td]:border [&>td]:px-3 [&>td]:py-2">
-                  <td>{fmtWAT(r.kickoff_utc)}</td>
-                  <td>{r.league}</td>
-                  <td>{r.tier ?? '—'}</td>
-                  <td>{r.home}</td>
-                  <td>{r.away}</td>
-                  <td>{r.region ?? '—'}</td>
+            {filtered.map((r, i) => {
+              const kickoff = r.kickoff_utc
+                ? new Date(r.kickoff_utc).toLocaleString("en-GB", {
+                    hour12: false,
+                    timeZoneName: undefined,
+                  })
+                : "";
+              return (
+                <tr key={i}>
+                  <td style={{ padding: "10px 12px", borderBottom: "1px solid #f2f2f2" }}>
+                    {kickoff}
+                  </td>
+                  <td style={{ padding: "10px 12px", borderBottom: "1px solid #f2f2f2" }}>
+                    {r.league ?? ""}
+                  </td>
+                  <td style={{ padding: "10px 12px", borderBottom: "1px solid #f2f2f2" }}>
+                    {r.tier ?? ""}
+                  </td>
+                  <td style={{ padding: "10px 12px", borderBottom: "1px solid #f2f2f2" }}>
+                    {r.home ?? ""}
+                  </td>
+                  <td style={{ padding: "10px 12px", borderBottom: "1px solid #f2f2f2" }}>
+                    {r.away ?? ""}
+                  </td>
+                  <td style={{ padding: "10px 12px", borderBottom: "1px solid #f2f2f2" }}>
+                    {r.region ?? ""}
+                  </td>
                 </tr>
-              ))
+              );
+            })}
+            {filtered.length === 0 && (
+              <tr>
+                <td colSpan={6} style={{ padding: 16, color: "#666" }}>
+                  No matches for your filters.
+                </td>
+              </tr>
             )}
           </tbody>
         </table>
-      </div>
+      )}
     </main>
   );
 }
