@@ -1,178 +1,227 @@
-"use client";
+'use client';
 
-import { useEffect, useMemo, useState } from "react";
-import { supabase } from "@/lib/supabaseClient"; // named export
-// This view is your public “next 48h” candidates
-const VIEW = "v_candidates_next_48h_public";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { supabase } from '@/lib/supabaseClient';
+
+const VIEW = 'v_candidates_next_48h_public';
+const TZ = 'Africa/Lagos';
 
 type Row = {
+  kickoff_utc: string | null;
   league: string | null;
+  tier: number | null;
   home: string | null;
   away: string | null;
-  kickoff_utc: string | null; // ISO string from DB
-  tier: number | null;
   region: string | null;
 };
 
-function sameLocalDate(iso: string | null, ymd: string): boolean {
-  if (!iso) return false;
-  const [y, m, d] = ymd.split("-").map((n) => parseInt(n, 10));
-  const dt = new Date(iso);
+function formatDateInput(d: Date): string {
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const yyyy = d.getFullYear();
+  return `${dd}/${mm}/${yyyy}`;
+}
+function parseDateInput(v: string): Date | null {
+  const m = v.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!m) return null;
+  const [, dd, mm, yyyy] = m;
+  const d = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+function toUrlDateFromInput(input: string): string | null {
+  const d = parseDateInput(input);
+  if (!d) return null;
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const yyyy = d.getFullYear();
+  return `${dd}-${mm}-${yyyy}`;
+}
+function fromUrlDateToInput(v: string | null): string | null {
+  if (!v) return null;
+  const m = v.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+  if (!m) return null;
+  const [, dd, mm, yyyy] = m;
+  return `${dd}/${mm}/${yyyy}`;
+}
+function formatKickoffWAT(isoUtc: string | null): string {
+  if (!isoUtc) return '';
+  const d = new Date(isoUtc);
+  const date = new Intl.DateTimeFormat('en-GB', {
+    timeZone: TZ,
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  }).format(d);
+  const time = new Intl.DateTimeFormat('en-GB', {
+    timeZone: TZ,
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(d);
+  return `${date}, ${time}`;
+}
+
+function Next48hInner() {
+  const pathname = usePathname();
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
+  const urlDate = searchParams.get('date');
+  const urlQ = searchParams.get('q') ?? '';
+
+  const [dateInput, setDateInput] = useState<string>(() => {
+    const v = fromUrlDateToInput(urlDate);
+    if (v) return v;
+    return formatDateInput(new Date());
+  });
+  const [query, setQuery] = useState(urlQ);
+
+  const [debouncedQ, setDebouncedQ] = useState(query);
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQ(query), 350);
+    return () => clearTimeout(t);
+  }, [query]);
+
+  const pushUrl = useCallback(
+    (nextDateInput: string, nextQ: string) => {
+      const params = new URLSearchParams(searchParams.toString());
+      const urlDateVal = toUrlDateFromInput(nextDateInput);
+      if (urlDateVal) params.set('date', urlDateVal);
+      else params.delete('date');
+      if (nextQ) params.set('q', nextQ);
+      else params.delete('q');
+      router.replace(`${pathname}?${params.toString()}`);
+    },
+    [pathname, router, searchParams],
+  );
+
+  const firstQSync = useRef(true);
+  useEffect(() => {
+    if (firstQSync.current) {
+      firstQSync.current = false;
+      return;
+    }
+    pushUrl(dateInput, debouncedQ);
+  }, [debouncedQ, dateInput, pushUrl]);
+
+  useEffect(() => {
+    const v = fromUrlDateToInput(urlDate);
+    if (v && v !== dateInput) setDateInput(v);
+    const newQ = urlQ ?? '';
+    if (newQ !== query) setQuery(newQ);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlDate, urlQ]);
+
+  const [rows, setRows] = useState<Row[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const { data, error } = await supabase
+      .from(VIEW)
+      .select('kickoff_utc,league,tier,home,away,region')
+      .order('kickoff_utc', { ascending: true });
+    if (!error) setRows((data ?? []) as Row[]);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const filtered = useMemo(() => {
+    const q = debouncedQ.trim().toLowerCase();
+    return rows.filter((r) => {
+      if (q) {
+        const blob = [r.league, r.home, r.away, r.region]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase();
+        if (!blob.includes(q)) return false;
+      }
+      if (r.kickoff_utc) {
+        const dStr = new Intl.DateTimeFormat('en-GB', {
+          timeZone: TZ,
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+        }).format(new Date(r.kickoff_utc));
+        if (dStr !== dateInput) return false;
+      }
+      return true;
+    });
+  }, [rows, debouncedQ, dateInput]);
+
   return (
-    dt.getFullYear() === y &&
-    dt.getMonth() + 1 === m &&
-    dt.getDate() === d
+    <div className="max-w-5xl mx-auto px-4 py-8">
+      <h1 className="text-2xl font-semibold mb-6">Next 48 Hours</h1>
+
+      <div className="flex gap-3 mb-4">
+        <input
+          type="text"
+          inputMode="numeric"
+          placeholder="dd/mm/yyyy"
+          className="border rounded px-3 py-2 w-40"
+          value={dateInput}
+          onChange={(e) => {
+            const next = e.target.value;
+            setDateInput(next);
+            pushUrl(next, debouncedQ);
+          }}
+        />
+        <input
+          type="search"
+          placeholder="Search league / team / region"
+          className="border rounded px-3 py-2 flex-1"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+      </div>
+
+      <div className="overflow-x-auto border rounded">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="[&>th]:text-left [&>th]:px-3 [&>th]:py-2 border-b">
+              <th>Kickoff (WAT)</th>
+              <th>League</th>
+              <th>Tier</th>
+              <th>Home</th>
+              <th>Away</th>
+              <th>Region</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading && (
+              <tr>
+                <td className="px-3 py-2" colSpan={6}>Loading…</td>
+              </tr>
+            )}
+            {!loading && filtered.length === 0 && (
+              <tr>
+                <td className="px-3 py-2" colSpan={6}>No fixtures found.</td>
+              </tr>
+            )}
+            {!loading && filtered.map((r, i) => (
+              <tr key={`${r.kickoff_utc ?? ''}-${i}`} className="border-t">
+                <td className="px-3 py-2">{formatKickoffWAT(r.kickoff_utc)}</td>
+                <td className="px-3 py-2">{r.league}</td>
+                <td className="px-3 py-2">{r.tier ?? ''}</td>
+                <td className="px-3 py-2">{r.home}</td>
+                <td className="px-3 py-2">{r.away}</td>
+                <td className="px-3 py-2">{r.region}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
 
 export default function Next48hPage() {
-  const [rows, setRows] = useState<Row[]>([]);
-  const [q, setQ] = useState("");
-  const [filterDate, setFilterDate] = useState<string>(""); // YYYY-MM-DD
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      setLoading(true);
-      setError(null);
-      const { data, error } = await supabase
-        .schema("api")
-        .from(VIEW)
-        .select("*");
-      if (cancelled) return;
-      if (error) {
-        setError(error.message);
-      } else {
-        setRows((data ?? []) as Row[]);
-      }
-      setLoading(false);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const filtered = useMemo(() => {
-    const qnorm = q.trim().toLowerCase();
-    return rows.filter((r) => {
-      const matchText =
-        !qnorm ||
-        [r.league, r.home, r.away, r.region]
-          .map((v) => (v ?? "").toLowerCase())
-          .some((v) => v.includes(qnorm));
-
-      const matchDate =
-        !filterDate || sameLocalDate(r.kickoff_utc, filterDate);
-
-      return matchText && matchDate;
-    });
-  }, [rows, q, filterDate]);
-
   return (
-    <main style={{ padding: "24px 32px", maxWidth: 1080, margin: "0 auto" }}>
-      <h1 style={{ fontSize: 28, fontWeight: 700, marginBottom: 16 }}>Next 48 Hours</h1>
-
-      <div style={{ display: "flex", gap: 12, marginBottom: 16 }}>
-        <input
-          aria-label="Pick a date"
-          type="date"
-          value={filterDate}
-          onChange={(e) => setFilterDate(e.target.value)}
-          style={{
-            height: 36,
-            padding: "0 10px",
-            border: "1px solid #ccc",
-            borderRadius: 6,
-          }}
-        />
-        <input
-          aria-label="Search"
-          type="text"
-          placeholder="Search league / team / region"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          style={{
-            flex: 1,
-            height: 36,
-            padding: "0 12px",
-            border: "1px solid #ccc",
-            borderRadius: 6,
-          }}
-        />
-      </div>
-
-      {loading && <div>Loading…</div>}
-      {error && <div style={{ color: "crimson" }}>Error: {error}</div>}
-
-      {!loading && !error && (
-        <table
-          style={{
-            width: "100%",
-            borderCollapse: "collapse",
-            border: "1px solid #ddd",
-          }}
-        >
-          <thead>
-            <tr>
-              {["Kickoff (WAT)", "League", "Tier", "Home", "Away", "Region"].map(
-                (h) => (
-                  <th
-                    key={h}
-                    style={{
-                      textAlign: "left",
-                      padding: "10px 12px",
-                      borderBottom: "1px solid #eee",
-                    }}
-                  >
-                    {h}
-                  </th>
-                )
-              )}
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((r, i) => {
-              const kickoff = r.kickoff_utc
-                ? new Date(r.kickoff_utc).toLocaleString("en-GB", {
-                    hour12: false,
-                    timeZoneName: undefined,
-                  })
-                : "";
-              return (
-                <tr key={i}>
-                  <td style={{ padding: "10px 12px", borderBottom: "1px solid #f2f2f2" }}>
-                    {kickoff}
-                  </td>
-                  <td style={{ padding: "10px 12px", borderBottom: "1px solid #f2f2f2" }}>
-                    {r.league ?? ""}
-                  </td>
-                  <td style={{ padding: "10px 12px", borderBottom: "1px solid #f2f2f2" }}>
-                    {r.tier ?? ""}
-                  </td>
-                  <td style={{ padding: "10px 12px", borderBottom: "1px solid #f2f2f2" }}>
-                    {r.home ?? ""}
-                  </td>
-                  <td style={{ padding: "10px 12px", borderBottom: "1px solid #f2f2f2" }}>
-                    {r.away ?? ""}
-                  </td>
-                  <td style={{ padding: "10px 12px", borderBottom: "1px solid #f2f2f2" }}>
-                    {r.region ?? ""}
-                  </td>
-                </tr>
-              );
-            })}
-            {filtered.length === 0 && (
-              <tr>
-                <td colSpan={6} style={{ padding: 16, color: "#666" }}>
-                  No matches for your filters.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      )}
-    </main>
+    <Suspense fallback={null}>
+      <Next48hInner />
+    </Suspense>
   );
 }
