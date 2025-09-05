@@ -1,11 +1,20 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import supabase from '@/lib/supabaseClient';
+import { supabase } from '@/lib/supabaseClient';
 
+const VIEW = 'v_candidates_today_public'; // DB view returning today's fixtures (UTC source, shown in WAT)
+
+// ----- Types -----
 type Row = {
-  kickoff_utc: string; // ISO in UTC from DB
+  kickoff_utc: string | null; // ISO UTC string from DB
   league: string | null;
   tier: number | null;
   home: string | null;
@@ -13,168 +22,207 @@ type Row = {
   region: string | null;
 };
 
-const VIEW = 'v_candidates_today_public' as const;
+// ----- Date helpers (URL ↔ input) -----
+const TZ = 'Africa/Lagos'; // WAT
 
-function toURLDate(d: Date): string {
-  // dd-MM-yyyy
+function formatDateInput(d: Date): string {
+  // dd/mm/yyyy
   const dd = String(d.getDate()).padStart(2, '0');
   const mm = String(d.getMonth() + 1).padStart(2, '0');
   const yyyy = d.getFullYear();
+  return `${dd}/${mm}/${yyyy}`;
+}
+
+function parseDateInput(v: string): Date | null {
+  const m = v.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!m) return null;
+  const [_, dd, mm, yyyy] = m;
+  const d = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function toUrlDateFromInput(input: string): string | null {
+  const d = parseDateInput(input);
+  if (!d) return null;
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const yyyy = d.getFullYear();
+  // dd-mm-yyyy
   return `${dd}-${mm}-${yyyy}`;
 }
 
-function fromURLDate(s: string | null): Date | null {
-  if (!s) return null;
-  // dd-MM-yyyy
-  const m = /^(\d{2})-(\d{2})-(\d{4})$/.exec(s);
-  if (!m) return null;
-  const [, dd, mm, yyyy] = m;
-  const d = new Date(Date.UTC(Number(yyyy), Number(mm) - 1, Number(dd)));
-  return Number.isNaN(d.getTime()) ? null : d;
-}
-
-function toInputValue(d: Date): string {
-  // yyyy-MM-dd for <input type="date">
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  return `${yyyy}-${mm}-${dd}`;
-}
-
-function fromInputValue(v: string): Date | null {
-  // yyyy-MM-dd
+function fromUrlDateToInput(v: string | null): string | null {
   if (!v) return null;
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
+  const m = v.match(/^(\d{2})-(\d{2})-(\d{4})$/);
   if (!m) return null;
-  const [, yyyy, mm, dd] = m;
-  const d = new Date(Date.UTC(Number(yyyy), Number(mm) - 1, Number(dd)));
-  return Number.isNaN(d.getTime()) ? null : d;
+  const [_, dd, mm, yyyy] = m;
+  return `${dd}/${mm}/${yyyy}`;
 }
 
-function startEndOfDayUTC(d: Date): { start: string; end: string } {
-  const start = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0, 0, 0, 0));
-  const end = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 23, 59, 59, 999));
-  return { start: start.toISOString(), end: end.toISOString() };
-}
-
-function fmtWAT(iso: string): string {
-  // WAT (Africa/Lagos)
-  return new Intl.DateTimeFormat('en-GB', {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-    timeZone: 'Africa/Lagos',
-  }).format(new Date(iso));
+// ----- Kickoff formatting in WAT -----
+function formatKickoffWAT(isoUtc: string | null): string {
+  if (!isoUtc) return '';
+  // Use Intl with explicit timeZone to show WAT
+  const d = new Date(isoUtc);
+  const date = new Intl.DateTimeFormat('en-GB', {
+    timeZone: TZ,
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  }).format(d);
+  const time = new Intl.DateTimeFormat('en-GB', {
+    timeZone: TZ,
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(d);
+  return `${date}, ${time}`;
 }
 
 export default function TodayPage() {
-  const router = useRouter();
   const pathname = usePathname();
+  const router = useRouter();
   const searchParams = useSearchParams();
 
-  // --- URL state bootstrapping
-  const urlDate = fromURLDate(searchParams.get('date'));
-  const [date, setDate] = useState<Date>(urlDate ?? new Date());
-  const [q, setQ] = useState<string>(searchParams.get('q') ?? '');
+  // URL state → controls
+  const urlDate = searchParams.get('date'); // dd-mm-yyyy
+  const urlQ = searchParams.get('q') ?? '';
 
-  // debounce (300ms)
-  const [qDebounced, setQDebounced] = useState(q);
+  // Controls
+  const [dateInput, setDateInput] = useState<string>(() => {
+    const v = fromUrlDateToInput(urlDate);
+    if (v) return v;
+    // default = "today" in TZ for visual; value is only used for filtering on the client
+    const now = new Date();
+    return formatDateInput(now);
+  });
+  const [query, setQuery] = useState(urlQ);
+
+  // Debounce search → 350ms
+  const [debouncedQ, setDebouncedQ] = useState(query);
   useEffect(() => {
-    const t = setTimeout(() => setQDebounced(q), 300);
+    const t = setTimeout(() => setDebouncedQ(query), 350);
     return () => clearTimeout(t);
-  }, [q]);
+  }, [query]);
 
-  // keep URL in sync when date/q change
-  const syncURL = useCallback(
-    (nextDate: Date, nextQ: string) => {
+  // Keep URL in sync when date changes
+  const pushUrl = useCallback(
+    (nextDateInput: string, nextQ: string) => {
       const params = new URLSearchParams(searchParams.toString());
-      params.set('date', toURLDate(nextDate));
-      if (nextQ.trim()) params.set('q', nextQ.trim());
+      // date
+      const urlDateVal = toUrlDateFromInput(nextDateInput);
+      if (urlDateVal) params.set('date', urlDateVal);
+      else params.delete('date');
+      // q
+      if (nextQ) params.set('q', nextQ);
       else params.delete('q');
+
       router.replace(`${pathname}?${params.toString()}`);
     },
     [pathname, router, searchParams],
   );
 
+  // When search changes (debounced), sync URL
+  const firstQSync = useRef(true);
   useEffect(() => {
-    syncURL(date, qDebounced);
-  }, [date, qDebounced, syncURL]);
+    // skip first run if URL already had q
+    if (firstQSync.current) {
+      firstQSync.current = false;
+      return;
+    }
+    pushUrl(dateInput, debouncedQ);
+  }, [debouncedQ, dateInput, pushUrl]);
 
-  // data
+  // When URL changes externally (back/forward), keep controls in sync
+  useEffect(() => {
+    const v = fromUrlDateToInput(urlDate);
+    if (v && v !== dateInput) setDateInput(v);
+    const newQ = urlQ ?? '';
+    if (newQ !== query) setQuery(newQ);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlDate, urlQ]);
+
+  // Data loading
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(false);
-  const alive = useRef(true);
-  useEffect(() => {
-    alive.current = true;
-    return () => {
-      alive.current = false;
-    };
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const { data, error } = await supabase
+      .from(VIEW) // no generics to satisfy CI typing
+      .select('kickoff_utc,league,tier,home,away,region')
+      .order('kickoff_utc', { ascending: true });
+    if (!error) setRows((data ?? []) as Row[]);
+    setLoading(false);
   }, []);
 
-  const { start, end } = useMemo(() => startEndOfDayUTC(date), [date]);
-
   useEffect(() => {
-    const run = async () => {
-      setLoading(true);
-      const orFilter = qDebounced.trim()
-        ? `league.ilike.%${qDebounced}%,home.ilike.%${qDebounced}%,away.ilike.%${qDebounced}%,region.ilike.%${qDebounced}%`
-        : undefined;
+    void load();
+  }, [load]);
 
-      let query = supabase
-        .from(VIEW)
-        .select('kickoff_utc,league,tier,home,away,region')
-        .gte('kickoff_utc', start)
-        .lte('kickoff_utc', end)
-        .order('kickoff_utc', { ascending: true });
-
-      if (orFilter) {
-        // Supabase 'or' needs the filter inside parentheses
-        // @ts-expect-error supabase-js typing is permissive here
-        query = query.or(`(${orFilter})`);
+  // Client-side filters (date + q)
+  const filtered = useMemo(() => {
+    const q = debouncedQ.trim().toLowerCase();
+    const dSel = parseDateInput(dateInput); // local date (not time-zone shifted)
+    return rows.filter((r) => {
+      // Text filter
+      if (q) {
+        const blob = [
+          r.league,
+          r.home,
+          r.away,
+          r.region,
+        ]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase();
+        if (!blob.includes(q)) return false;
       }
-
-      const { data, error } = await query;
-
-      if (!alive.current) return;
-      setLoading(false);
-
-      if (error) {
-        console.error(error);
-        setRows([]);
-        return;
+      // Date filter (compare by WAT calendar day)
+      if (dSel && r.kickoff_utc) {
+        const dt = new Date(r.kickoff_utc);
+        const dStr = new Intl.DateTimeFormat('en-GB', {
+          timeZone: TZ,
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+        }).format(dt); // yyyy? no — en-GB gives dd/mm/yyyy
+        if (dStr !== dateInput) return false;
       }
-      setRows((data ?? []) as Row[]);
-    };
-
-    run();
-  }, [start, end, qDebounced]);
+      return true;
+    });
+  }, [rows, debouncedQ, dateInput]);
 
   return (
-    <main className="mx-auto max-w-5xl px-6 py-8">
+    <div className="max-w-5xl mx-auto px-4 py-8">
       <h1 className="text-2xl font-semibold mb-6">Today</h1>
 
-      <div className="flex gap-3 items-center mb-4">
+      <div className="flex gap-3 mb-4">
         <input
-          type="date"
-          className="border rounded px-3 py-2"
-          value={toInputValue(date)}
+          type="text"
+          inputMode="numeric"
+          placeholder="dd/mm/yyyy"
+          className="border rounded px-3 py-2 w-40"
+          value={dateInput}
           onChange={(e) => {
-            const d = fromInputValue(e.target.value);
-            if (d) setDate(d);
+            const next = e.target.value;
+            setDateInput(next);
+            // push immediately for date (no debounce)
+            pushUrl(next, debouncedQ);
           }}
         />
         <input
-          type="text"
-          className="flex-1 border rounded px-3 py-2"
+          type="search"
           placeholder="Search league / team / region"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
+          className="border rounded px-3 py-2 flex-1"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
         />
       </div>
 
-      <div className="overflow-x-auto">
-        <table className="min-w-full border-collapse">
+      <div className="overflow-x-auto border rounded">
+        <table className="w-full text-sm">
           <thead>
-            <tr className="[&>th]:border-b [&>th]:px-3 [&>th]:py-2 text-left">
+            <tr className="[&>th]:text-left [&>th]:px-3 [&>th]:py-2 border-b">
               <th>Kickoff (WAT)</th>
               <th>League</th>
               <th>Tier</th>
@@ -191,27 +239,27 @@ export default function TodayPage() {
                 </td>
               </tr>
             )}
-            {!loading &&
-              rows.map((r, i) => (
-                <tr key={`${r.kickoff_utc}-${i}`} className="[&>td]:border-b [&>td]:px-3 [&>td]:py-2">
-                  <td>{fmtWAT(r.kickoff_utc)}</td>
-                  <td>{r.league ?? ''}</td>
-                  <td>{r.tier ?? ''}</td>
-                  <td>{r.home ?? ''}</td>
-                  <td>{r.away ?? ''}</td>
-                  <td>{r.region ?? ''}</td>
-                </tr>
-              ))}
-            {!loading && rows.length === 0 && (
+            {!loading && filtered.length === 0 && (
               <tr>
-                <td className="px-3 py-4 text-slate-500" colSpan={6}>
+                <td className="px-3 py-2" colSpan={6}>
                   No fixtures found.
                 </td>
               </tr>
             )}
+            {!loading &&
+              filtered.map((r, i) => (
+                <tr key={`${r.kickoff_utc ?? ''}-${i}`} className="border-t">
+                  <td className="px-3 py-2">{formatKickoffWAT(r.kickoff_utc)}</td>
+                  <td className="px-3 py-2">{r.league}</td>
+                  <td className="px-3 py-2">{r.tier ?? ''}</td>
+                  <td className="px-3 py-2">{r.home}</td>
+                  <td className="px-3 py-2">{r.away}</td>
+                  <td className="px-3 py-2">{r.region}</td>
+                </tr>
+              ))}
           </tbody>
         </table>
       </div>
-    </main>
+    </div>
   );
 }
