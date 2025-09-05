@@ -1,20 +1,14 @@
 'use client';
 
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
 
-const VIEW = 'v_candidates_next_48h_public'; // DB view returning next 48h fixtures (UTC source, shown in WAT)
+const VIEW = 'v_candidates_next_48h_public';
+const TZ = 'Africa/Lagos';
 
-// ----- Types -----
 type Row = {
-  kickoff_utc: string | null; // ISO UTC string from DB
+  kickoff_utc: string | null;
   league: string | null;
   tier: number | null;
   home: string | null;
@@ -22,41 +16,34 @@ type Row = {
   region: string | null;
 };
 
-// ----- Date helpers (URL ↔ input) -----
-const TZ = 'Africa/Lagos'; // WAT
-
 function formatDateInput(d: Date): string {
   const dd = String(d.getDate()).padStart(2, '0');
   const mm = String(d.getMonth() + 1).padStart(2, '0');
   const yyyy = d.getFullYear();
   return `${dd}/${mm}/${yyyy}`;
 }
-
 function parseDateInput(v: string): Date | null {
   const m = v.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
   if (!m) return null;
-  const [_, dd, mm, yyyy] = m;
+  const [, dd, mm, yyyy] = m;
   const d = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
   return Number.isNaN(d.getTime()) ? null : d;
 }
-
 function toUrlDateFromInput(input: string): string | null {
   const d = parseDateInput(input);
   if (!d) return null;
   const dd = String(d.getDate()).padStart(2, '0');
   const mm = String(d.getMonth() + 1).padStart(2, '0');
   const yyyy = d.getFullYear();
-  return `${dd}-${mm}-${yyyy}`; // dd-mm-yyyy
+  return `${dd}-${mm}-${yyyy}`;
 }
-
 function fromUrlDateToInput(v: string | null): string | null {
   if (!v) return null;
   const m = v.match(/^(\d{2})-(\d{2})-(\d{4})$/);
   if (!m) return null;
-  const [_, dd, mm, yyyy] = m;
+  const [, dd, mm, yyyy] = m;
   return `${dd}/${mm}/${yyyy}`;
 }
-
 function formatKickoffWAT(isoUtc: string | null): string {
   if (!isoUtc) return '';
   const d = new Date(isoUtc);
@@ -74,23 +61,21 @@ function formatKickoffWAT(isoUtc: string | null): string {
   return `${date}, ${time}`;
 }
 
-export default function Next48hPage() {
+function Next48hInner() {
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const urlDate = searchParams.get('date'); // dd-mm-yyyy
+  const urlDate = searchParams.get('date');
   const urlQ = searchParams.get('q') ?? '';
 
   const [dateInput, setDateInput] = useState<string>(() => {
     const v = fromUrlDateToInput(urlDate);
     if (v) return v;
-    const now = new Date();
-    return formatDateInput(now);
+    return formatDateInput(new Date());
   });
   const [query, setQuery] = useState(urlQ);
 
-  // Debounce search
   const [debouncedQ, setDebouncedQ] = useState(query);
   useEffect(() => {
     const t = setTimeout(() => setDebouncedQ(query), 350);
@@ -103,10 +88,8 @@ export default function Next48hPage() {
       const urlDateVal = toUrlDateFromInput(nextDateInput);
       if (urlDateVal) params.set('date', urlDateVal);
       else params.delete('date');
-
       if (nextQ) params.set('q', nextQ);
       else params.delete('q');
-
       router.replace(`${pathname}?${params.toString()}`);
     },
     [pathname, router, searchParams],
@@ -146,23 +129,16 @@ export default function Next48hPage() {
     void load();
   }, [load]);
 
-  // In Next 48h, we keep the same filters for UX consistency:
   const filtered = useMemo(() => {
     const q = debouncedQ.trim().toLowerCase();
     return rows.filter((r) => {
       if (q) {
-        const blob = [
-          r.league,
-          r.home,
-          r.away,
-          r.region,
-        ]
+        const blob = [r.league, r.home, r.away, r.region]
           .filter(Boolean)
           .join(' ')
           .toLowerCase();
         if (!blob.includes(q)) return false;
       }
-      // Optional: if a date is chosen, keep fixtures whose WAT calendar day equals it.
       if (r.kickoff_utc) {
         const dStr = new Intl.DateTimeFormat('en-GB', {
           timeZone: TZ,
@@ -217,32 +193,35 @@ export default function Next48hPage() {
           <tbody>
             {loading && (
               <tr>
-                <td className="px-3 py-2" colSpan={6}>
-                  Loading…
-                </td>
+                <td className="px-3 py-2" colSpan={6}>Loading…</td>
               </tr>
             )}
             {!loading && filtered.length === 0 && (
               <tr>
-                <td className="px-3 py-2" colSpan={6}>
-                  No fixtures found.
-                </td>
+                <td className="px-3 py-2" colSpan={6}>No fixtures found.</td>
               </tr>
             )}
-            {!loading &&
-              filtered.map((r, i) => (
-                <tr key={`${r.kickoff_utc ?? ''}-${i}`} className="border-t">
-                  <td className="px-3 py-2">{formatKickoffWAT(r.kickoff_utc)}</td>
-                  <td className="px-3 py-2">{r.league}</td>
-                  <td className="px-3 py-2">{r.tier ?? ''}</td>
-                  <td className="px-3 py-2">{r.home}</td>
-                  <td className="px-3 py-2">{r.away}</td>
-                  <td className="px-3 py-2">{r.region}</td>
-                </tr>
-              ))}
+            {!loading && filtered.map((r, i) => (
+              <tr key={`${r.kickoff_utc ?? ''}-${i}`} className="border-t">
+                <td className="px-3 py-2">{formatKickoffWAT(r.kickoff_utc)}</td>
+                <td className="px-3 py-2">{r.league}</td>
+                <td className="px-3 py-2">{r.tier ?? ''}</td>
+                <td className="px-3 py-2">{r.home}</td>
+                <td className="px-3 py-2">{r.away}</td>
+                <td className="px-3 py-2">{r.region}</td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>
     </div>
+  );
+}
+
+export default function Next48hPage() {
+  return (
+    <Suspense fallback={null}>
+      <Next48hInner />
+    </Suspense>
   );
 }
